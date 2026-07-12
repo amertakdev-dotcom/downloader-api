@@ -671,25 +671,27 @@ function renderResult(json) {
   let dlHTML = `<div class="dl-section-title">Download</div><div class="dl-options">`;
   let hasAny = false;
 
+  const safeTitle = (title || 'download').replace(/[\\/:*?"<>|]+/g, '_').slice(0, 60);
+
   if (platform === 'youtube') {
     const best = d.bestDownload;
     if (best?.video?.url) {
       const fmts = (d.formats?.video || []).filter(f=>f.url).slice(0,6);
-      const opts = fmts.map(f=>`<option value="${esc(f.url)}">${esc(f.quality)} — ${f.fileSizeMB||'?'}MB</option>`).join('');
+      const opts = fmts.map(f=>`<option value="${esc(f.url)}" data-ext="${esc(f.container||'mp4')}">${esc(f.quality)} — ${f.fileSizeMB||'?'}MB</option>`).join('');
       dlHTML += dlRow('video','▶','Video (MP4)',
         `Select quality`,
         `<select class="fmt-select" id="ytVideoSel">${opts}</select>
-         <a class="btn-dl" href="#" onclick="dlSelected('ytVideoSel');return false">Download</a>`
+         <button type="button" class="btn-dl" onclick="downloadFromSelect('ytVideoSel','${escJs(safeTitle)}')">Download</button>`
       );
       hasAny = true;
     }
     if (best?.audio?.url) {
       const afmts = (d.formats?.audio || []).filter(f=>f.url).slice(0,4);
-      const aopts = afmts.map(f=>`<option value="${esc(f.url)}">${esc(f.quality||'Audio')} — ${f.fileSizeMB||'?'}MB</option>`).join('');
+      const aopts = afmts.map(f=>`<option value="${esc(f.url)}" data-ext="${esc(f.container||'m4a')}">${esc(f.quality||'Audio')} — ${f.fileSizeMB||'?'}MB</option>`).join('');
       dlHTML += dlRow('audio','🎵','Audio only',
-        `MP3 / M4A`,
+        `Best available format`,
         `<select class="fmt-select" id="ytAudioSel">${aopts}</select>
-         <a class="btn-dl" href="#" onclick="dlSelected('ytAudioSel');return false">Download</a>`
+         <button type="button" class="btn-dl" onclick="downloadFromSelect('ytAudioSel','${escJs(safeTitle)}')">Download</button>`
       );
       hasAny = true;
     }
@@ -698,31 +700,31 @@ function renderResult(json) {
   if (platform === 'tiktok') {
     const dl = d.downloads;
     if (dl?.noWatermark) {
-      dlHTML += dlRow('video','▶','No watermark', 'MP4 HD', `<a class="btn-dl" href="${esc(dl.noWatermark)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('video','▶','No watermark', 'MP4 HD', dlBtn(dl.noWatermark, safeTitle, 'mp4'));
       hasAny = true;
     }
     if (dl?.hdNoWatermark) {
-      dlHTML += dlRow('video','⭐','HD No watermark', 'Highest quality', `<a class="btn-dl" href="${esc(dl.hdNoWatermark)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('video','⭐','HD No watermark', 'Highest quality', dlBtn(dl.hdNoWatermark, safeTitle + '_hd', 'mp4'));
     }
     if (dl?.withWatermark) {
-      dlHTML += dlRow('video','💧','With watermark', 'Original', `<a class="btn-dl" href="${esc(dl.withWatermark)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('video','💧','With watermark', 'Original', dlBtn(dl.withWatermark, safeTitle + '_wm', 'mp4'));
     }
     if (dl?.audio) {
-      dlHTML += dlRow('audio','🎵','Audio / Music', 'MP3', `<a class="btn-dl" href="${esc(dl.audio)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('audio','🎵','Audio / Music', 'MP3', dlBtn(dl.audio, safeTitle, 'mp3'));
     }
   }
 
   if (platform === 'pinterest') {
     const dl = d.downloads;
     if (dl?.video) {
-      dlHTML += dlRow('video','▶','Video', 'MP4', `<a class="btn-dl" href="${esc(dl.video)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('video','▶','Video', 'MP4', dlBtn(dl.video, safeTitle, 'mp4'));
       hasAny = true;
     }
     if (dl?.imageOriginal) {
-      dlHTML += dlRow('image','🖼','Image (Original)', 'Highest quality', `<a class="btn-dl" href="${esc(dl.imageOriginal)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('image','🖼','Image (Original)', 'Highest quality', dlBtn(dl.imageOriginal, safeTitle, 'jpg'));
       hasAny = true;
     } else if (dl?.image) {
-      dlHTML += dlRow('image','🖼','Image', 'Pinterest', `<a class="btn-dl" href="${esc(dl.image)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('image','🖼','Image', 'Pinterest', dlBtn(dl.image, safeTitle, 'jpg'));
       hasAny = true;
     }
   }
@@ -730,14 +732,16 @@ function renderResult(json) {
   if (platform === 'spotify') {
     const dl = d.downloads;
     if (dl?.mp3?.url) {
-      dlHTML += dlRow('audio','🎵',`MP3 — ${dl.mp3.quality||''}`,`via ${dl.mp3.source||'spotifydown'}`, `<a class="btn-dl" href="${esc(dl.mp3.url)}" target="_blank" rel="noreferrer">Download</a>`);
+      dlHTML += dlRow('audio','🎵',`MP3 — ${dl.mp3.quality||''}`,`via ${dl.mp3.source||'spotifydown'}`, dlBtn(dl.mp3.url, safeTitle, 'mp3'));
       hasAny = true;
     }
     if (dl?.preview?.url) {
-      dlHTML += dlRow('audio','🔊','30s Preview', 'Spotify preview', `<a class="btn-dl" href="${esc(dl.preview.url)}" target="_blank" rel="noreferrer">Play</a>`);
+      dlHTML += dlRow('audio','🔊','30s Preview', 'Spotify preview', dlBtn(dl.preview.url, safeTitle + '_preview', 'mp3'));
       hasAny = true;
     }
     if (dl?.youtubeMatch) {
+      // This opens the YouTube page itself (not a file), so a new tab is
+      // correct here — it isn't a direct downloadable file.
       dlHTML += dlRow('video','▶','YouTube Match', dl.youtubeMatch.note||'Via YouTube', `<a class="btn-dl" href="${esc(dl.youtubeMatch.youtubeUrl)}" target="_blank" rel="noreferrer">Open</a>`);
       hasAny = true;
     }
@@ -793,9 +797,46 @@ function dlRow(type, icon, label, sub, actionHTML) {
   </div>`;
 }
 
-function dlSelected(selId) {
+// Builds a small HTML button that downloads a file in one click via the
+// backend proxy — no new tab, no browser navigation, just a real download.
+function dlBtn(url, filename, ext) {
+  return `<button type="button" class="btn-dl" onclick="triggerDownload('${escJs(url)}','${escJs(filename)}','${escJs(ext||'')}')">Download</button>`;
+}
+
+function downloadFromSelect(selId, filename) {
   const sel = document.getElementById(selId);
-  if (sel && sel.value) window.open(sel.value, '_blank', 'noreferrer');
+  if (!sel || !sel.value) return;
+  const ext = sel.selectedOptions[0]?.dataset?.ext || '';
+  triggerDownload(sel.value, filename, ext);
+}
+
+// Streams the file through our own backend (Content-Disposition: attachment)
+// so the browser saves it directly instead of opening a new tab / player.
+function triggerDownload(fileUrl, filename, ext) {
+  if (!fileUrl) return;
+  const proxyUrl = `${BASE}/api/proxy-download?url=${encodeURIComponent(fileUrl)}`
+    + `&filename=${encodeURIComponent(filename || 'download')}`
+    + (ext ? `&ext=${encodeURIComponent(ext)}` : '');
+
+  const a = document.createElement('a');
+  a.href = proxyUrl;
+  a.download = filename || '';
+  a.rel = 'noreferrer';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// Escapes a string for safe embedding inside a single-quoted HTML attribute
+// that itself contains inline JS (onclick="...('...')").
+function escJs(s) {
+  return String(s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function fmtSec(s) {

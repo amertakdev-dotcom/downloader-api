@@ -6,6 +6,7 @@ const rateLimit = require("express-rate-limit");
 
 const downloadRoutes = require("../routes/download");
 const infoRoutes = require("../routes/info");
+const proxyRoutes = require("../routes/proxy");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,6 +45,7 @@ app.use("/api/", (req, res, next) => {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 app.use("/api", downloadRoutes);
 app.use("/api", infoRoutes);
+app.use("/api", proxyRoutes);
 
 // ─── Health Check ─────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
@@ -58,6 +60,7 @@ app.get("/", (req, res) => {
       pinterest: "GET /api/pinterest?url=PIN_URL",
       spotify: "GET /api/spotify?url=TRACK_OR_ALBUM_URL",
       info: "GET /api/info?url=ANY_URL (auto-detect platform)",
+      proxyDownload: "GET /api/proxy-download?url=FILE_URL&filename=NAME&ext=mp4 (forces one-click download)",
     },
     docs: "Add x-api-key header if API_SECRET_KEY is set in .env",
   });

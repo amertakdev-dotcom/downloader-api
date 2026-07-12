@@ -1,4 +1,5 @@
 const axios = require("axios");
+const ytdl = require("@distube/ytdl-core");
 
 const UA = process.env.USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
@@ -34,7 +35,47 @@ function validateYouTubeURL(url) {
   );
 }
 
-// ─── Method 1: Cobalt API (best, no bot detection) ────────────────────────────
+// ─── Method 0: @distube/ytdl-core (PRIMARY — direct from YouTube, no 3rd party) ─
+// Cobalt's public "/api/json" endpoint was shut down in Nov 2024, and the
+// remaining public cobalt.tools instance has since been blocked by YouTube's
+// anti-bot measures — so ytdl-core is now the only reliable source of real
+// download links. It resolves googlevideo.com CDN URLs straight from YouTube.
+async function getFromYtdlCore(url) {
+  try {
+    const info = await ytdl.getInfo(url, {
+      requestOptions: { headers: { "User-Agent": UA } },
+    });
+    const allFormats = info.formats || [];
+
+    // Progressive formats (video+audio already muxed together) — these are
+    // the ones that can be downloaded directly with one click, no merging
+    // needed. YouTube usually offers these up to 720p (itags 18, 22).
+    const progressive = allFormats
+      .filter((f) => f.hasVideo && f.hasAudio && f.url)
+      .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+    // Audio-only formats (highest bitrate first)
+    const audioOnly = allFormats
+      .filter((f) => f.hasAudio && !f.hasVideo && f.url)
+      .sort((a, b) => (b.audioBitrate || 0) - (a.audioBitrate || 0));
+
+    return {
+      videoDetails: info.videoDetails,
+      progressive,
+      audioOnly,
+    };
+  } catch (e) {
+    console.warn("[YouTube] ytdl-core failed:", e.message);
+    return null;
+  }
+}
+
+function bytesToMB(bytes) {
+  if (!bytes) return null;
+  return Math.round((parseInt(bytes) / (1024 * 1024)) * 10) / 10;
+}
+
+// ─── Method 1: Cobalt API (legacy fallback — public instances are largely dead) ─
 async function getFromCobalt(url, quality = "1080") {
   const cobaltInstances = [
     "https://cobalt.tools",
@@ -359,10 +400,54 @@ async function getYouTubeInfo(url) {
     }
   }
 
-  // ── Step 3: Cobalt API for download links (primary) ───────────────────────
-  const qualityList = ["1080", "720", "480", "360"];
+  // ── Step 3: ytdl-core for real download links (primary) ───────────────────
   const cobaltLinks = [];
+  let usedYtdlCore = false;
 
+  try {
+    const ytd = await getFromYtdlCore(url);
+    if (ytd) {
+      usedYtdlCore = true;
+
+      // Fill in any metadata still missing from oEmbed/scrape
+      const vd = ytd.videoDetails || {};
+      if (!result.data.title && vd.title) result.data.title = vd.title;
+      if (!result.data.author.name && vd.author?.name) result.data.author.name = vd.author.name;
+      if (!result.data.duration && vd.lengthSeconds) {
+        result.data.duration = parseInt(vd.lengthSeconds);
+        result.data.durationFormatted = formatDuration(result.data.duration);
+      }
+
+      for (const f of ytd.progressive) {
+        cobaltLinks.push({
+          quality: f.qualityLabel || `${f.height || "?"}p`,
+          url: f.url,
+          type: "video",
+          source: "ytdl-core",
+          format: f.container || "mp4",
+          fileSizeMB: bytesToMB(f.contentLength),
+        });
+      }
+
+      for (const f of ytd.audioOnly.slice(0, 3)) {
+        cobaltLinks.push({
+          quality: f.audioBitrate ? `${f.audioBitrate}kbps` : "best",
+          url: f.url,
+          type: "audio",
+          source: "ytdl-core",
+          format: f.container || "m4a",
+          fileSizeMB: bytesToMB(f.contentLength),
+        });
+      }
+    }
+  } catch (e) {
+    console.warn("[YouTube] ytdl-core step failed:", e.message);
+  }
+
+  // ── Step 3b: Cobalt API for download links (legacy fallback) ──────────────
+  const qualityList = ["1080", "720", "480", "360"];
+
+  if (!usedYtdlCore || cobaltLinks.length === 0) {
   for (const q of qualityList) {
     try {
       const cobalt = await getFromCobalt(url, q);
@@ -441,34 +526,35 @@ async function getYouTubeInfo(url) {
       }
     } catch {}
   }
+  } // end cobalt fallback (only runs when ytdl-core produced nothing)
 
   result.data.cobaltLinks = cobaltLinks;
 
-  // Map cobalt links to formats structure (same shape as before for HTML compatibility)
+  // Map links to formats structure (same shape as before for HTML compatibility)
   result.data.formats.video = cobaltLinks
     .filter(l => l.type === "video")
     .map(l => ({
       quality: l.quality,
       itag: null,
-      mimeType: "video/mp4",
-      container: "mp4",
+      mimeType: `video/${l.format || "mp4"}`,
+      container: l.format || "mp4",
       fps: null,
       bitrate: null,
       contentLength: null,
-      fileSizeMB: null,
+      fileSizeMB: l.fileSizeMB || null,
       url: l.url,
     }));
 
   result.data.formats.audio = cobaltLinks
     .filter(l => l.type === "audio")
     .map(l => ({
-      quality: "best",
+      quality: l.quality || "best",
       itag: null,
-      mimeType: "audio/mp3",
-      container: "mp3",
+      mimeType: `audio/${l.format || "mp3"}`,
+      container: l.format || "mp3",
       audioBitrate: null,
       contentLength: null,
-      fileSizeMB: null,
+      fileSizeMB: l.fileSizeMB || null,
       url: l.url,
     }));
 
@@ -477,8 +563,8 @@ async function getYouTubeInfo(url) {
   const bestAud = result.data.formats.audio[0] || null;
 
   result.data.bestDownload = {
-    video: bestVid ? { quality: bestVid.quality, url: bestVid.url, fileSizeMB: null, container: "mp4" } : null,
-    audio: bestAud ? { quality: "best", url: bestAud.url, fileSizeMB: null, container: "mp3" } : null,
+    video: bestVid ? { quality: bestVid.quality, url: bestVid.url, fileSizeMB: bestVid.fileSizeMB, container: bestVid.container } : null,
+    audio: bestAud ? { quality: bestAud.quality, url: bestAud.url, fileSizeMB: bestAud.fileSizeMB, container: bestAud.container } : null,
   };
 
   // ── Step 4: Y2Mate fallback if Cobalt gave nothing ────────────────────────
